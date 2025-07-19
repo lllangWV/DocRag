@@ -75,10 +75,6 @@ class Document(PyArrowInterface):
     filepath: str = ""
     ingestion_timestamp: datetime = datetime.now()
     
-    @staticmethod
-    def remomve_duplicate(documents: list["Document"]):
-        return cls(filepath=str(path.relative_to(os.getcwd())))
-
 
 
 
