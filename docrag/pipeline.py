@@ -13,6 +13,7 @@ from docrag.core.doclayout_extraction import extract_page_elements_with_yolo
 from docrag.core.document_image_store import (
     Document,
     DocumentImageStore,
+    ExtractedPageElement,
     Page,
     PageElement,
 )
@@ -153,3 +154,76 @@ def ingest_documents(
     store.page_element_db.add_page_elements(page_elements)
     
     return store
+
+
+def enrich_elements_with_llm(
+    store: DocumentImageStore,
+    model_name: str,
+    elements_to_process: pa.Table | None = None
+):
+    """
+    Processes element images with an LLM to extract text and summaries.
+
+    Args:
+        store: The main DocumentImageStore instance.
+        model_name: The identifier for the LLM being used.
+        elements_to_process: Optional table of specific elements to process.
+                             If None, it processes all unprocessed elements.
+    """
+    # 1. Find out what work needs to be done
+    processed_ids = store.extracted_page_element_db.get_processed_element_ids()
+    print(f"Found {len(processed_ids)} elements that are already processed.")
+
+    if elements_to_process is None:
+        # Read all elements if a specific subset isn't provided
+        elements_to_process = store.page_element_db.read_all()
+
+    # Filter out elements that are already processed
+    unprocessed_elements_filter = ~pc.field("element_id").isin(processed_ids)
+    elements_to_process = elements_to_process.filter(unprocessed_elements_filter)
+    
+    if len(elements_to_process) == 0:
+        print("No new elements to process.")
+        return
+
+    print(f"Found {len(elements_to_process)} new elements to process with model: {model_name}")
+
+    # 2. Process in batches
+    results = []
+    for batch in elements_to_process.to_batches(max_chunksize=10): # Process 10 at a time
+        batch_df = batch.to_pandas()
+        for _, element in batch_df.iterrows():
+            element_image = element['image']
+            element_id = element['element_id']
+
+            # --- LLM API Call ---
+            # extracted_text = get_text_from_image(element_image, model=model_name)
+            # summary = get_summary(extracted_text, model=model_name)
+            # This is where your actual call to OpenAI, Gemini, etc. would go
+            extracted_text = f"Text for element {element_id}" # Placeholder
+            summary = f"Summary for element {element_id}" # Placeholder
+            # --------------------
+
+            results.append(ExtractedPageElement(
+                element_id=element_id,
+                extracted_text=extracted_text,
+                summary=summary,
+                llm_model=model_name
+            ))
+
+    # 3. Save the results to the new store
+    if results:
+        print(f"Saving {len(results)} new content extractions to the store.")
+        store.content_db.add_content(results)
+
+    print("Enrichment complete.")
+
+
+
+if __name__ == "__main__":
+    store = DocumentImageStore.from_path("DocumentImageStore")
+    
+    
+    
+    
+    enrich_elements_with_llm(store, "gpt-4o")

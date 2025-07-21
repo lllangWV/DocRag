@@ -16,6 +16,8 @@ CURRENT_DIR = Path(__file__).parent
 
 logger = logging.getLogger(__name__)
 
+
+
 class PyArrowInterface(ABC):
     @classmethod
     def from_dict(cls, data: dict):
@@ -51,7 +53,8 @@ class PyArrowInterface(ABC):
 class Page(PyArrowInterface):
     document_id: int = 1 
     local_page_id: int = 1
-    image: bytes = b"F"
+    hash: str = ""
+    path: str = ""
     height: int = 100
     width: int = 100
     ingestion_timestamp: datetime = datetime.now()
@@ -62,7 +65,8 @@ class PageElement(PyArrowInterface):
     document_id: int = 1
     page_id: int = 1
     element_type: str = "text"
-    image: bytes = b"F"
+    hash: str = ""
+    path: str = ""
     confidence: float = 0.5
     bbox: tuple[int, int, int, int] = (0, 0, 100, 100)
     sort_order: int = 1
@@ -72,16 +76,32 @@ class PageElement(PyArrowInterface):
 class Document(PyArrowInterface):
     page_count: int = 1
     hash: str = ""
-    filepath: str = ""
+    path: str = ""
     ingestion_timestamp: datetime = datetime.now()
     
 
+@dataclass
+class ExtractedPageElement(PyArrowInterface):
+    # Foreign key to link back to the specific element
+    page_element_id: int  # Or string if you adopt string-based IDs
+    extracted_text: str
+    success: bool = True
+    llm_model: str # e.g., 'gpt-4o', 'gemini-1.5-pro'
+    extraction_timestamp: datetime = datetime.now()
 
-
-class PageStore(ParquetDB):
-    initial_fields = Page.get_fields()
-    def __init__(self, path: str = "pagedb", **kwargs):
-        super().__init__(path, initial_fields=self.initial_fields, convert_to_fixed_shape=False, **kwargs)
+class PageStore:
+    def __init__(self, store_path: str = "pagedb", metadata:dict = {}, **kwargs):
+        self.store_path = Path(store_path)
+        self.image_store_path = self.store_path / "image_store"
+        self.db_path = self.store_path / "db"
+        self.db_path.mkdir(parents=True, exist_ok=True)
+        self.image_store_path.mkdir(parents=True, exist_ok=True)
+        
+        schema = pa.schema(Page.get_fields(), metadata=metadata)
+        
+        
+        self.db = ParquetDB(self.db_path, schema=schema, convert_to_fixed_shape=False, **kwargs)
+        
         
     def add_page(self, page: Page):
         return self.create(page.to_table())
@@ -150,17 +170,49 @@ class DocumentStore(ParquetDB):
         is_in = pc.is_in(incoming_doc_hashes, existing_doc_hashes)
         return documents.filter(pc.invert(is_in))
 
+
+
+class ExtractedPageElementStore(ParquetDB):
+    # Note: Your get_fields() might need adjustment for Optional types
+    # It's often more robust to define the schema explicitly here.
+    initial_fields = ExtractedPageElement.get_fields()
+    def __init__(self, path: Path, **kwargs):
+        super().__init__(path, initial_fields=self.initial_fields, convert_to_fixed_shape=False, **kwargs)
+
+    def add_content(self, content: list[ExtractedPageElement], **kwargs):
+        """Adds a batch of extracted content to the store."""
+        if not content:
+            return []
+        content = ExtractedPageElement.to_table_from_list(content)
+        return self.create(content, **kwargs)
+
+    def get_processed_element_ids(self) -> set[int]:
+        """
+        Efficiently retrieves all element_ids that are already in the store.
+        This is crucial for avoiding re-processing.
+        """
+        try:
+            table = self.read(columns=['element_id'])
+            return set(table['element_id'].to_pylist())
+        except FileNotFoundError:
+            return set()
+
+
+
+
 @dataclass
 class DocumentImageStore:
     page_db: PageStore
     page_element_db: PageElementStore
     document_db: DocumentStore
+    extracted_page_element_db: ExtractedPageElementStore
         
     @classmethod
     def from_path(cls, page_image_store_path: Path = "page_image_store"):
         page_db_path = page_image_store_path / "pages"
         page_element_db_path = page_image_store_path / "page_elements"
         document_db_path = page_image_store_path / "documents"
+        extracted_content_db_path = page_image_store_path / "extracted_content"
         page_db = PageStore(page_db_path)
         page_element_db = PageElementStore(page_element_db_path)
         document_db = DocumentStore(document_db_path)
