@@ -196,3 +196,5 @@ _version.py
 sphinx/_build/
 
 .env
+
+.cursor
